@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Soundboard · TV total Style</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #0e0f13;
+    --bg2: #16181f;
+    --ink: #f5f6f8;
+    --muted: #9aa0ab;
+  }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(1200px 600px at 50% -10%, #1c2030 0%, var(--bg) 60%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 16px 48px;
+    -webkit-font-smoothing: antialiased;
+  }
+  header { text-align: center; margin-bottom: 22px; }
+  .logo {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    font-weight: 900; letter-spacing: -0.02em;
+    font-size: clamp(28px, 6vw, 46px);
+    line-height: 1;
+  }
+  .logo .tv {
+    background: #e5002a; color: #fff; padding: 4px 10px; border-radius: 10px;
+    transform: rotate(-3deg); box-shadow: 0 6px 18px rgba(229,0,42,.45);
+  }
+  .logo .total { color: #fff; }
+  .tagline { margin-top: 10px; color: var(--muted); font-size: 14px; }
+  .hint { margin-top: 4px; color: var(--muted); font-size: 12px; opacity: .8; }
+
+  .grid {
+    width: 100%;
+    max-width: 880px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 14px;
+    margin-top: 24px;
+  }
+  .btn {
+    position: relative;
+    border: none;
+    border-radius: 16px;
+    padding: 20px 14px;
+    min-height: 92px;
+    color: #fff;
+    font-size: 16px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    text-align: center;
+    box-shadow: 0 8px 0 rgba(0,0,0,.35), 0 14px 26px rgba(0,0,0,.35);
+    transition: transform .06s ease, box-shadow .06s ease, filter .15s ease;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overflow: hidden;
+  }
+  .btn .emoji { font-size: 30px; line-height: 1; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active, .btn.playing {
+    transform: translateY(6px);
+    box-shadow: 0 2px 0 rgba(0,0,0,.35), 0 6px 14px rgba(0,0,0,.35);
+  }
+  .btn::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0) 45%);
+    pointer-events: none;
+  }
+  .btn.playing::before {
+    content: ""; position: absolute; inset: -2px;
+    border: 3px solid rgba(255,255,255,.85);
+    border-radius: 18px;
+    animation: pulse .5s ease-out;
+  }
+  @keyframes pulse {
+    from { opacity: .9; transform: scale(1); }
+    to   { opacity: 0;  transform: scale(1.06); }
+  }
+
+  footer { margin-top: 34px; color: var(--muted); font-size: 12px; text-align: center; max-width: 560px; line-height: 1.6; }
+  footer code { background: var(--bg2); padding: 2px 6px; border-radius: 6px; color: #c9cfda; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .btn, .btn.playing::before { transition: none; animation: none; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="logo"><span class="tv">TV</span><span class="total">total</span></div>
+    <div class="tagline">Das Soundboard – klick dich durch die Effekte</div>
+    <div class="hint">Tipp: Tasten <b>1–9</b> lösen die ersten Buttons aus · <b>Leertaste</b> stoppt alles</div>
+  </header>
+
+  <main class="grid" id="grid" aria-label="Soundboard-Buttons"></main>
+
+  <footer>
+    Alle Sounds werden live im Browser per <b>Web Audio API</b> erzeugt – keine externen Dateien, nichts Urheberrechtliches.<br>
+    Eigene Samples einhängen? Gib einem Button einfach <code>audio: "pfad.mp3"</code> im <code>SOUNDS</code>-Array mit.
+  </footer>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---- Audio-Engine -------------------------------------------------------
+  let ctx;
+  const active = new Set();
+  function ac() {
+    if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume();
+    return ctx;
+  }
+  function track(node) {
+    active.add(node);
+    node.onended = () => active.delete(node);
+  }
+  function stopAll() {
+    active.forEach(n => { try { n.stop(); } catch (e) {} });
+    active.clear();
+  }
+
+  // Hüllkurve-Helfer
+  function envGain(t0, attack, hold, release, peak = 0.9) {
+    const g = ac().createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(peak, t0 + attack);
+    g.gain.setValueAtTime(peak, t0 + attack + hold);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + hold + release);
+    return g;
+  }
+  function noiseBuffer(seconds) {
+    const a = ac();
+    const buf = a.createBuffer(1, Math.ceil(a.sampleRate * seconds), a.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+  function tone(freq, t0, dur, type = "sine", peak = 0.6) {
+    const a = ac();
+    const o = a.createOscillator();
+    o.type = type; o.frequency.setValueAtTime(freq, t0);
+    const g = envGain(t0, 0.008, dur * 0.4, dur * 0.6, peak);
+    o.connect(g).connect(a.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+    track(o);
+    return o;
+  }
+
+  // ---- Die einzelnen Sounds ----------------------------------------------
+  const S = {
+    applaus() {
+      const a = ac(), t = a.currentTime, dur = 2.4;
+      const src = a.createBufferSource();
+      src.buffer = noiseBuffer(dur);
+      const bp = a.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 2200; bp.Q.value = 0.7;
+      const g = a.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.7, t + 0.25);
+      // "Klatschen" durch Amplituden-Flackern
+      for (let i = 0; i < 40; i++) {
+        const tt = t + 0.1 + Math.random() * (dur - 0.4);
+        g.gain.setValueAtTime(0.35 + Math.random() * 0.5, tt);
+      }
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(bp).connect(g).connect(a.destination);
+      src.start(t); src.stop(t + dur); track(src);
+    },
+    lacher() {
+      const a = ac(); let t = a.currentTime;
+      const base = 240;
+      for (let i = 0; i < 6; i++) {
+        const o = a.createOscillator(); o.type = "sawtooth";
+        const f = base + Math.sin(i) * 30;
+        o.frequency.setValueAtTime(f, t);
+        o.frequency.exponentialRampToValueAtTime(f * 1.5, t + 0.08);
+        o.frequency.exponentialRampToValueAtTime(f, t + 0.16);
+        const g = envGain(t, 0.01, 0.05, 0.1, 0.28);
+        const lp = a.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 1200;
+        o.connect(lp).connect(g).connect(a.destination);
+        o.start(t); o.stop(t + 0.22); track(o);
+        t += 0.17;
+      }
+    },
+    buh() {
+      const a = ac(), t = a.currentTime;
+      const o = a.createOscillator(); o.type = "sawtooth";
+      o.frequency.setValueAtTime(160, t);
+      o.frequency.linearRampToValueAtTime(90, t + 1.1);
+      const lp = a.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 700;
+      const g = envGain(t, 0.05, 0.6, 0.5, 0.5);
+      o.connect(lp).connect(g).connect(a.destination);
+      o.start(t); o.stop(t + 1.2); track(o);
+    },
+    trommelwirbel() {
+      const a = ac(); let t = a.currentTime;
+      const total = 1.4, hits = 34;
+      for (let i = 0; i < hits; i++) {
+        const src = a.createBufferSource(); src.buffer = noiseBuffer(0.04);
+        const bp = a.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 400; bp.Q.value = 1.2;
+        const g = envGain(t, 0.001, 0.005, 0.03, 0.25 + (i / hits) * 0.35);
+        src.connect(bp).connect(g).connect(a.destination);
+        src.start(t); track(src);
+        t += total / hits;
+      }
+      // Abschluss: Becken
+      const cy = a.createBufferSource(); cy.buffer = noiseBuffer(0.6);
+      const hp = a.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 6000;
+      const g2 = envGain(t, 0.001, 0.05, 0.5, 0.6);
+      cy.connect(hp).connect(g2).connect(a.destination);
+      cy.start(t); track(cy);
+    },
+    fanfare() {
+      const a = ac(); const t = a.currentTime;
+      const notes = [523.25, 659.25, 783.99, 1046.5]; // C E G C
+      notes.forEach((f, i) => tone(f, t + i * 0.14, 0.4, "square", 0.4));
+      tone(1046.5, t + 0.56, 0.7, "square", 0.45);
+    },
+    gong() {
+      const a = ac(), t = a.currentTime;
+      [1, 2.7, 5.4].forEach((m, i) => {
+        const o = a.createOscillator(); o.type = "sine";
+        o.frequency.value = 120 * m;
+        const g = envGain(t, 0.01, 0.1, 3.2, 0.5 / (i + 1));
+        o.connect(g).connect(a.destination);
+        o.start(t); o.stop(t + 3.4); track(o);
+      });
+    },
+    boing() {
+      const a = ac(), t = a.currentTime;
+      const o = a.createOscillator(); o.type = "sine";
+      o.frequency.setValueAtTime(600, t);
+      o.frequency.exponentialRampToValueAtTime(120, t + 0.5);
+      // Wobble
+      const lfo = a.createOscillator(); lfo.frequency.value = 14;
+      const lg = a.createGain(); lg.gain.value = 40;
+      lfo.connect(lg).connect(o.frequency);
+      const g = envGain(t, 0.005, 0.1, 0.45, 0.6);
+      o.connect(g).connect(a.destination);
+      o.start(t); lfo.start(t); o.stop(t + 0.6); lfo.stop(t + 0.6); track(o);
+    },
+    airhorn() {
+      const a = ac(); let t = a.currentTime;
+      for (let rep = 0; rep < 3; rep++) {
+        [233, 293, 349].forEach(f => {
+          const o = a.createOscillator(); o.type = "sawtooth"; o.frequency.value = f;
+          const g = envGain(t, 0.02, 0.18, 0.06, 0.22);
+          o.connect(g).connect(a.destination);
+          o.start(t); o.stop(t + 0.3); track(o);
+        });
+        t += 0.3;
+      }
+    },
+    rimshot() {
+      const a = ac(); let t = a.currentTime;
+      const snare = (tt, pk) => {
+        const s = a.createBufferSource(); s.buffer = noiseBuffer(0.12);
+        const bp = a.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 1800; bp.Q.value = 0.8;
+        const g = envGain(tt, 0.001, 0.01, 0.1, pk);
+        s.connect(bp).connect(g).connect(a.destination); s.start(tt); track(s);
+      };
+      snare(t, 0.4); snare(t + 0.18, 0.4);
+      // "Tss" Becken
+      const cy = a.createBufferSource(); cy.buffer = noiseBuffer(0.5);
+      const hp = a.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 7000;
+      const g = envGain(t + 0.36, 0.001, 0.03, 0.4, 0.5);
+      cy.connect(hp).connect(g).connect(a.destination); cy.start(t + 0.36); track(cy);
+    },
+    sadtrombone() {
+      const a = ac(); let t = a.currentTime;
+      const steps = [311, 293, 277, 233]; // absteigend, "wah wah wah waaah"
+      steps.forEach((f, i) => {
+        const o = a.createOscillator(); o.type = "sawtooth";
+        const last = i === steps.length - 1;
+        o.frequency.setValueAtTime(f * 1.06, t);
+        o.frequency.linearRampToValueAtTime(f, t + (last ? 0.5 : 0.22));
+        const lp = a.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 1000;
+        const g = envGain(t, 0.02, last ? 0.5 : 0.16, 0.15, 0.4);
+        o.connect(lp).connect(g).connect(a.destination);
+        o.start(t); o.stop(t + (last ? 0.75 : 0.4)); track(o);
+        t += last ? 0.6 : 0.26;
+      });
+    },
+    explosion() {
+      const a = ac(), t = a.currentTime;
+      const src = a.createBufferSource(); src.buffer = noiseBuffer(1.4);
+      const lp = a.createBiquadFilter(); lp.type = "lowpass";
+      lp.frequency.setValueAtTime(1800, t);
+      lp.frequency.exponentialRampToValueAtTime(120, t + 1.2);
+      const g = envGain(t, 0.005, 0.2, 1.1, 0.85);
+      src.connect(lp).connect(g).connect(a.destination);
+      src.start(t); src.stop(t + 1.4); track(src);
+    },
+    coin() {
+      const a = ac(), t = a.currentTime;
+      tone(988, t, 0.08, "square", 0.4);
+      tone(1319, t + 0.08, 0.35, "square", 0.4);
+    },
+    scratch() {
+      const a = ac(), t = a.currentTime;
+      const o = a.createOscillator(); o.type = "sawtooth";
+      const f = o.frequency; f.setValueAtTime(180, t);
+      for (let i = 1; i <= 10; i++) {
+        f.linearRampToValueAtTime(i % 2 ? 520 : 140, t + i * 0.045);
+      }
+      const bp = a.createBiquadFilter(); bp.type = "bandpass"; bp.frequency.value = 900; bp.Q.value = 2;
+      const g = envGain(t, 0.005, 0.35, 0.1, 0.4);
+      o.connect(bp).connect(g).connect(a.destination);
+      o.start(t); o.stop(t + 0.55); track(o);
+    },
+    tada() {
+      const a = ac(); const t = a.currentTime;
+      [523.25, 659.25, 783.99].forEach(f => tone(f, t, 0.5, "triangle", 0.35));
+      [1046.5, 1318.5].forEach(f => tone(f, t + 0.14, 0.8, "triangle", 0.35));
+      // kleiner Becken-Akzent
+      const cy = a.createBufferSource(); cy.buffer = noiseBuffer(0.5);
+      const hp = a.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 6000;
+      const g = envGain(t, 0.001, 0.05, 0.4, 0.45);
+      cy.connect(hp).connect(g).connect(a.destination); cy.start(t); track(cy);
+    },
+    beep() {
+      const a = ac(), t = a.currentTime;
+      tone(1000, t, 0.5, "square", 0.5);
+    },
+    ping() {
+      const a = ac(), t = a.currentTime;
+      tone(1568, t, 0.9, "sine", 0.5);
+    }
+  };
+
+  // ---- Button-Definitionen -----------------------------------------------
+  // Eigene Datei? Feld `audio: "pfad.mp3"` ergänzen – hat Vorrang vor der Synth-Funktion.
+  const SOUNDS = [
+    { label: "Applaus",        emoji: "👏", color: "#e5002a", play: S.applaus },
+    { label: "Lacher",         emoji: "😂", color: "#f39c12", play: S.lacher },
+    { label: "Buh!",           emoji: "👎", color: "#34495e", play: S.buh },
+    { label: "Trommelwirbel",  emoji: "🥁", color: "#8e44ad", play: S.trommelwirbel },
+    { label: "Fanfare",        emoji: "🎺", color: "#16a085", play: S.fanfare },
+    { label: "Gong",           emoji: "🔔", color: "#c0392b", play: S.gong },
+    { label: "Boing",          emoji: "🤸", color: "#2980b9", play: S.boing },
+    { label: "Airhorn",        emoji: "📣", color: "#d35400", play: S.airhorn },
+    { label: "Ba-dum-tss",     emoji: "🥁", color: "#27ae60", play: S.rimshot },
+    { label: "Sad Trombone",   emoji: "🎷", color: "#7f8c8d", play: S.sadtrombone },
+    { label: "Explosion",      emoji: "💥", color: "#e74c3c", play: S.explosion },
+    { label: "Münze",          emoji: "🪙", color: "#f1c40f", play: S.coin },
+    { label: "Scratch",        emoji: "💿", color: "#2c3e50", play: S.scratch },
+    { label: "Tadaa!",         emoji: "🎉", color: "#9b59b6", play: S.tada },
+    { label: "Beep",           emoji: "📟", color: "#1abc9c", play: S.beep },
+    { label: "Ping",           emoji: "✨", color: "#3498db", play: S.ping }
+  ];
+
+  // ---- Rendering ----------------------------------------------------------
+  const grid = document.getElementById("grid");
+  const buttons = [];
+
+  SOUNDS.forEach((snd, i) => {
+    const b = document.createElement("button");
+    b.className = "btn";
+    b.style.background = snd.color;
+    b.setAttribute("aria-label", snd.label);
+    b.innerHTML = `<span class="emoji">${snd.emoji}</span><span>${snd.label}</span>`;
+
+    let buffered = null;
+    const fire = () => {
+      ac();
+      if (snd.audio) {
+        // Eigene Datei abspielen (mit einfachem Caching)
+        if (!buffered) buffered = new Audio(snd.audio);
+        buffered.currentTime = 0;
+        buffered.play().catch(() => snd.play && snd.play());
+      } else {
+        snd.play();
+      }
+      b.classList.remove("playing");
+      void b.offsetWidth; // reflow für Animation
+      b.classList.add("playing");
+    };
+    b.addEventListener("click", fire);
+    b.addEventListener("animationend", () => b.classList.remove("playing"));
+    grid.appendChild(b);
+    buttons.push({ el: b, fire });
+  });
+
+  // ---- Tastatur -----------------------------------------------------------
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space") { e.preventDefault(); stopAll(); return; }
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= 9 && buttons[n - 1]) buttons[n - 1].fire();
+  });
+})();
+</script>
+</body>
+</html>
